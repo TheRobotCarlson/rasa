@@ -311,7 +311,7 @@ def test_write_utf_8_yaml_file(tmp_path: Path):
     file_path = str(tmp_path / "test.yml")
     data = {"data": "amazing 🌈"}
 
-    io_utils.write_yaml_file(data, file_path)
+    io_utils.write_yaml(data, file_path)
     assert io_utils.read_file(file_path) == "data: amazing 🌈\n"
 
 
@@ -361,9 +361,7 @@ def test_dump_yaml_key_order(
 
     # dumping `data` will result in alphabetical or reverse-alphabetical list of keys,
     # depending on the value of `should_preserve_key_order`
-    io_utils.write_yaml_file(
-        data, file, should_preserve_key_order=should_preserve_key_order
-    )
+    io_utils.write_yaml(data, file, should_preserve_key_order=should_preserve_key_order)
     with file.open() as f:
         keys = [line.split(":")[0] for line in f.readlines()]
 
