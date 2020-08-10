@@ -8,6 +8,7 @@ import traceback
 import typing
 from functools import reduce, wraps
 from inspect import isawaitable
+from pathlib import Path
 from typing import Any, Callable, List, Optional, Text, Union, Dict
 
 import rasa
@@ -754,50 +755,15 @@ def create_app(
             "train your model.",
         )
 
-        rjs = request.json
-        validate_request(rjs)
-
-        # create a temporary directory to store config, domain and
-        # training data
-        temp_dir = tempfile.mkdtemp()
-
-        config_path = os.path.join(temp_dir, "config.yml")
-
-        rasa.utils.io.write_text_file(rjs["config"], config_path)
-
-        if "nlu" in rjs:
-            nlu_path = os.path.join(temp_dir, "nlu.md")
-            rasa.utils.io.write_text_file(rjs["nlu"], nlu_path)
-
-        if "stories" in rjs:
-            stories_path = os.path.join(temp_dir, "stories.md")
-            rasa.utils.io.write_text_file(rjs["stories"], stories_path)
-
-        if "responses" in rjs:
-            responses_path = os.path.join(temp_dir, "responses.md")
-            rasa.utils.io.write_text_file(rjs["responses"], responses_path)
-
-        domain_path = DEFAULT_DOMAIN_PATH
-        if "domain" in rjs:
-            domain_path = os.path.join(temp_dir, "domain.yml")
-            rasa.utils.io.write_text_file(rjs["domain"], domain_path)
-
-        if rjs.get("save_to_default_model_directory", True) is True:
-            model_output_directory = DEFAULT_MODELS_PATH
+        if request.headers.get("Content-type") == "application/yaml":
+            training_payload = _training_payload_from_yaml(request)
         else:
-            model_output_directory = tempfile.gettempdir()
+            rjs = request.json
+            training_payload = _training_payload_from_json(rjs)
 
         try:
             with app.active_training_processes.get_lock():
                 app.active_training_processes.value += 1
-
-            info = dict(
-                domain=domain_path,
-                config=config_path,
-                training_files=temp_dir,
-                output=model_output_directory,
-                force_training=rjs.get("force", False),
-            )
 
             loop = asyncio.get_event_loop()
 
@@ -807,7 +773,7 @@ def create_app(
             model_path: Optional[Text] = None
             # pass `None` to run in default executor
             model_path = await loop.run_in_executor(
-                None, functools.partial(train_model, **info)
+                None, functools.partial(train_model, **training_payload)
             )
 
             filename = os.path.basename(model_path) if model_path else None
@@ -831,33 +797,6 @@ def create_app(
         finally:
             with app.active_training_processes.get_lock():
                 app.active_training_processes.value -= 1
-
-    def validate_request(rjs: Dict):
-        if "config" not in rjs:
-            raise ErrorResponse(
-                400,
-                "BadRequest",
-                "The training request is missing the required key `config`.",
-                {"parameter": "config", "in": "body"},
-            )
-
-        if "nlu" not in rjs and "stories" not in rjs:
-            raise ErrorResponse(
-                400,
-                "BadRequest",
-                "To train a Rasa model you need to specify at least one type of "
-                "training data. Add `nlu` and/or `stories` to the request.",
-                {"parameters": ["nlu", "stories"], "in": "body"},
-            )
-
-        if "stories" in rjs and "domain" not in rjs:
-            raise ErrorResponse(
-                400,
-                "BadRequest",
-                "To train a Rasa model with story training data, you also need to "
-                "specify the `domain`.",
-                {"parameter": "domain", "in": "body"},
-            )
 
     @app.post("/model/test/stories")
     @requires_auth(app, auth_token)
@@ -1115,3 +1054,110 @@ def _get_output_channel(
         matching_channels,
         CollectingOutputChannel(),
     )
+
+
+def _training_payload_from_json(
+    request_payload: Dict,
+) -> Dict[Text, Union[Text, bool]]:
+    _validate_json_training_payload(request_payload)
+
+    # create a temporary directory to store config, domain and
+    # training data
+    temp_dir = tempfile.mkdtemp()
+
+    config_path = os.path.join(temp_dir, "config.yml")
+
+    rasa.utils.io.write_text_file(request_payload["config"], config_path)
+
+    if "nlu" in request_payload:
+        nlu_path = os.path.join(temp_dir, "nlu.md")
+        rasa.utils.io.write_text_file(request_payload["nlu"], nlu_path)
+
+    if "stories" in request_payload:
+        stories_path = os.path.join(temp_dir, "stories.md")
+        rasa.utils.io.write_text_file(request_payload["stories"], stories_path)
+
+    if "responses" in request_payload:
+        responses_path = os.path.join(temp_dir, "responses.md")
+        rasa.utils.io.write_text_file(request_payload["responses"], responses_path)
+
+    domain_path = DEFAULT_DOMAIN_PATH
+    if "domain" in request_payload:
+        domain_path = os.path.join(temp_dir, "domain.yml")
+        rasa.utils.io.write_text_file(request_payload["domain"], domain_path)
+
+    if request_payload.get("save_to_default_model_directory", True) is True:
+        model_output_directory = DEFAULT_MODELS_PATH
+    else:
+        model_output_directory = tempfile.gettempdir()
+
+    return dict(
+        domain=domain_path,
+        config=config_path,
+        training_files=temp_dir,
+        output=model_output_directory,
+        force_training=request_payload.get("force", None),
+    )
+
+
+def _validate_json_training_payload(rjs: Dict):
+    if "config" not in rjs:
+        raise ErrorResponse(
+            400,
+            "BadRequest",
+            "The training request is missing the required key `config`.",
+            {"parameter": "config", "in": "body"},
+        )
+
+    if "nlu" not in rjs and "stories" not in rjs:
+        raise ErrorResponse(
+            400,
+            "BadRequest",
+            "To train a Rasa model you need to specify at least one type of "
+            "training data. Add `nlu` and/or `stories` to the request.",
+            {"parameters": ["nlu", "stories"], "in": "body"},
+        )
+
+    if "stories" in rjs and "domain" not in rjs:
+        raise ErrorResponse(
+            400,
+            "BadRequest",
+            "To train a Rasa model with story training data, you also need to "
+            "specify the `domain`.",
+            {"parameter": "domain", "in": "body"},
+        )
+
+
+def _training_payload_from_yaml(request: Request,) -> Dict[Text, Union[Text, bool]]:
+    decoded = request.body.decode(rasa.utils.io.DEFAULT_ENCODING)
+    _validate_yaml_training_payload(decoded)
+
+    temp_dir = tempfile.mkdtemp()
+    training_data = Path(temp_dir) / "data.yml"
+    rasa.utils.io.write_text_file(decoded, training_data)
+
+    if request.args.get("save_to_default_model_directory", True) is True:
+        model_output_directory = DEFAULT_MODELS_PATH
+    else:
+        model_output_directory = tempfile.gettempdir()
+
+    return dict(
+        domain=str(training_data),
+        config=str(training_data),
+        training_files=temp_dir,
+        output=model_output_directory,
+        force_training=request.args.get("force_training", False),
+    )
+
+
+def _validate_yaml_training_payload(yaml_text: Text) -> None:
+    try:
+        rasa.utils.io.read_yaml(yaml_text)
+    except Exception:
+        raise ErrorResponse(
+            400,
+            "BadRequest",
+            "The request body does not contain valid YAML.",
+            # TODO: Add training data docs url
+            help_url=None,
+        )

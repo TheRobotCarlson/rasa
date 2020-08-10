@@ -437,10 +437,17 @@ paths:
         NLU model will be trained. The new model is not loaded by default.
       requestBody:
         required: true
+        description: >-
+          The training data can either be in YAML format or a JSON
+          which contains Rasa training data in Markdown format for each required key.
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/TrainingRequest'
+          application/yaml:
+            schema:
+              type: string
+
       responses:
         200:
           description: Zipped Rasa model
